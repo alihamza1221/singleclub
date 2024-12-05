@@ -17,6 +17,7 @@ import { removeAdmin } from "../util_apis/remove_admin.js";
 import { rejectUserToPresent } from "../util_apis/reject_user_to_present.js";
 import { muteTracks } from "../util_apis/mute_track.js";
 import AudioRouter from "./audiolib_routes.js";
+import MultiVideoRouter from "./multi_videolib.js";
 config();
 
 const app = express();
@@ -27,6 +28,8 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cors());
 
 app.use("/audio", AudioRouter);
+app.use("/multi_video", MultiVideoRouter);
+
 router.post("/create_stream", createStream);
 router.post("/invite_to_stage", inviteToStage);
 router.post("/stop_stream", stopStream);
@@ -44,6 +47,7 @@ router.post("/block_participant", blockParticipant);
 router.post("/mute_tracks", muteTracks);
 
 app.use(router);
+
 app.listen(process.env.PORT || 3000, () => {
   console.log("SDK started on port 3000");
 });

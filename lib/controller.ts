@@ -27,7 +27,12 @@ type PublishDataType = {
 export type RoomMetadata = {
   creator_identity: string;
   enable_chat?: boolean;
-  type?: "audio-only" | "audio-video";
+  type?:
+    | "audio-only"
+    | "audio-video"
+    | "multi-video"
+    | "live-audio-video"
+    | "vs-mode";
   seats?: {
     id: number;
     occupied: boolean;
@@ -107,6 +112,7 @@ export type DeleteRoomParams = {
 export type InviteToStageParams = {
   seatId?: number;
   identity: string;
+  multi_video_room?: boolean;
 };
 
 export type RemoveFromStageParams = {
@@ -155,7 +161,10 @@ export class Controller {
   }
 
   async createStream({
-    metadata,
+    metadata = {
+      type: "audio-video",
+      creator_identity: "null",
+    },
     room_name: roomName,
     AccessTokenOptions = {},
     createOptions = {},
@@ -237,6 +246,69 @@ export class Controller {
       ...{
         type: "audio-only",
         seats: Array.from({ length: 9 }, (_, index) => ({
+          id: index + 1,
+          occupied: false,
+          locked: false,
+          assignedParticipant: null,
+        })),
+      },
+    };
+    console.log("metadata::", metadata);
+    await this.roomService.createRoom({
+      name: roomName,
+      metadata: JSON.stringify(metadata),
+      ...createOptions,
+    });
+
+    const connection_details = {
+      ws_url: process.env.LIVEKIT_WS_URL!,
+      token: await at.toJwt(),
+    };
+
+    const authToken = this.createAuthToken(roomName, metadata.creator_identity);
+
+    return {
+      auth_token: authToken,
+      connection_details,
+      roomName,
+    };
+  }
+
+  async createMultiStream({
+    metadata,
+    room_name: roomName,
+    AccessTokenOptions = {},
+    createOptions = {},
+  }: CreateStreamParams): Promise<CreateStreamResponse> {
+    const at = new AccessToken(
+      process.env.LIVEKIT_API_KEY!,
+      process.env.LIVEKIT_API_SECRET!,
+      {
+        identity: metadata.creator_identity,
+        ...AccessTokenOptions,
+      }
+    );
+
+    if (!roomName) {
+      roomName = generateRoomId();
+    }
+
+    at.addGrant({
+      room: roomName,
+      roomJoin: true,
+      canPublish: true,
+      canPublishSources: [TrackSource.MICROPHONE, TrackSource.CAMERA],
+      canSubscribe: true,
+      roomAdmin: true,
+      canPublishData: true,
+    });
+
+    // TODO turn off auto creation in the dashboard
+    metadata = {
+      ...metadata,
+      ...{
+        type: "multi-video",
+        seats: Array.from({ length: 5 }, (_, index) => ({
           id: index + 1,
           occupied: false,
           locked: false,
@@ -643,7 +715,7 @@ export class Controller {
         seat.occupied = false;
       }
     }
-    console.log("after::roommeta", roomMetaData);
+
     //update metadata
     await this.roomService.updateRoomMetadata(
       session.room_name,
@@ -656,7 +728,7 @@ export class Controller {
 
   async inviteToStageAudio(
     session: Session,
-    { identity, seatId = -1 }: InviteToStageParams
+    { identity, seatId = -1, multi_video_room = false }: InviteToStageParams
   ) {
     const rooms = await this.roomService.listRooms([session.room_name]);
 
@@ -675,6 +747,14 @@ export class Controller {
 
     const metadata = this.getOrCreateParticipantMetadata(participant);
 
+    if (seatId != -1) {
+      const idBound = multi_video_room ? seatId > 5 : seatId > 9;
+      if (idBound) {
+        return {
+          message: "SeatId out of bound",
+        };
+      }
+    }
     if (seatId == -1 && metadata.reqSeatId && metadata.reqSeatId != -1) {
       seatId = metadata.reqSeatId;
       metadata.reqSeatId = -1;
@@ -690,12 +770,12 @@ export class Controller {
 
     const validNumPublication = await this.validateNumPublication(
       session.room_name,
-      "audio-only"
+      !multi_video_room ? "audio-only" : "multi-video"
     );
 
     const roomMetadata =
       room.metadata && (JSON.parse(room.metadata) as RoomMetadata);
-    //only 5 publishers are allowed
+    //only 5 publishers for multi-video room and 9 for audio are allowed
     if (!validNumPublication) {
       metadata.invited_to_stage = false;
       permission.canPublish = false;
@@ -731,7 +811,10 @@ export class Controller {
         }
       }
     } else if (metadata.reqToPresent) {
-      permission.canPublishSources = [TrackSource.MICROPHONE];
+      permission.canPublishSources = multi_video_room
+        ? [TrackSource.CAMERA, TrackSource.MICROPHONE]
+        : [TrackSource.MICROPHONE];
+
       metadata.invited_to_stage = true;
       permission.canPublish = true;
       metadata.reqToPresent = false;
@@ -763,7 +846,9 @@ export class Controller {
       requesterMetaData.isAdmin
     ) {
       metadata.invited_to_stage = true;
-      permission.canPublishSources = [TrackSource.MICROPHONE];
+      permission.canPublishSources = multi_video_room
+        ? [TrackSource.CAMERA, TrackSource.MICROPHONE]
+        : [TrackSource.MICROPHONE];
       permission.canPublish = true;
 
       //update seat
@@ -796,7 +881,6 @@ export class Controller {
       permission
     );
 
-    console.log("updated metadata", roomMetadata);
     console.log("metadata", metadata);
     await this.roomService.updateRoomMetadata(
       session.room_name,
@@ -805,7 +889,9 @@ export class Controller {
 
     if (!validNumPublication)
       return {
-        message: "9 person on call. Wait for availability",
+        message: `${
+          multi_video_room ? "5" : "9"
+        } person on call. Wait for availability`,
       };
     else return {};
   }
@@ -866,8 +952,6 @@ export class Controller {
 
     const room = rooms[0];
 
-    console.log("req to pre", session, seatId);
-
     if (rooms.length === 0 || !session.identity) {
       throw new Error("Room does not exist");
     }
@@ -883,9 +967,14 @@ export class Controller {
     metadata.reqToPresent = true;
     metadata.reqSeatId = seatId;
 
+    const roomMetaData =
+      room.metadata && (JSON.parse(room.metadata) as RoomMetadata);
+
+    let multi_video_room = false;
+    if (roomMetaData) multi_video_room = roomMetaData?.type === "multi-video";
     const validNumPublication = await this.validateNumPublication(
       session.room_name,
-      "audio-only"
+      multi_video_room? "multi-video":"audio-only"
     );
     try {
       // If approved and invited to stage, then we let the put them on stage
@@ -899,8 +988,7 @@ export class Controller {
         metadata.reqSeatId = -1;
 
         //update the seat
-        const roomMetaData =
-          room.metadata && (JSON.parse(room.metadata) as RoomMetadata);
+
         if (roomMetaData && roomMetaData.seats) {
           const seat = roomMetaData.seats.find((seat) => seat.id == seatId);
           if (seat) {
@@ -1062,11 +1150,15 @@ export class Controller {
       ) {
         throw new Error("Only the Admin can set this to true");
       }
+      const roomMetaData =
+        room.metadata && (JSON.parse(room.metadata) as RoomMetadata);
 
       const permission =
         participant.permission || ({} as ParticipantPermission);
       metadata.requested_to_call = true;
 
+      let multi_video_room = false;
+      if (roomMetaData) multi_video_room = roomMetaData.type === "multi-video";
       if (setFalse) {
         metadata.requested_to_call = false;
         metadata.invited_to_stage = false;
@@ -1084,9 +1176,9 @@ export class Controller {
       }
       const validNumPublication = await this.validateNumPublication(
         session.room_name,
-        "audio-only"
+        multi_video_room ? "multi-video" : "audio-only"
       );
-      //only 9 publishers are allowed
+      //only 9 publishers for audio and 5 for multi video are allowed
       if (!validNumPublication) {
         metadata.invited_to_stage = false;
         permission.canPublish = false;
@@ -1103,8 +1195,6 @@ export class Controller {
 
         metadata.seatId = metadata.reqSeatId;
         metadata.reqSeatId = -1;
-        const roomMetaData =
-          room.metadata && (JSON.parse(room.metadata) as RoomMetadata);
 
         if (roomMetaData && metadata.reqSeatId != -1) {
           const seat = roomMetaData.seats?.find(
@@ -1129,7 +1219,11 @@ export class Controller {
       );
 
       if (!validNumPublication)
-        return { message: "9 person on video. Wait for availability" };
+        return {
+          message: `${
+            multi_video_room ? "5" : "9"
+          } person on video. Wait for availability`,
+        };
     } catch (e) {
       return {
         message: e,
@@ -1181,6 +1275,28 @@ export class Controller {
     for (const r of roomsList) {
       const metadata = r.metadata && (JSON.parse(r.metadata) as RoomMetadata);
       if (r.name && metadata && metadata.type === "audio-only") {
+        const roomparticipants = await this.roomService.listParticipants(
+          r.name
+        );
+
+        const cur = {
+          roomInfo: r,
+          participants: roomparticipants,
+        };
+        roomWithparticipants.push(cur);
+      }
+    }
+
+    return roomWithparticipants;
+  }
+
+  async getMutliVideoRoomWithParticipants() {
+    const roomsList = await this.roomService.listRooms();
+    let roomWithparticipants: any = [];
+
+    for (const r of roomsList) {
+      const metadata = r.metadata && (JSON.parse(r.metadata) as RoomMetadata);
+      if (r.name && metadata && metadata.type === "multi-video") {
         const roomparticipants = await this.roomService.listParticipants(
           r.name
         );
@@ -1504,7 +1620,9 @@ export class Controller {
     //participant will still be able to re-join
     await this.roomService.removeParticipant(session.room_name, identity);
 
-    return "success";
+    return {
+      message: "success removed participant",
+    };
   }
 
   async blockParticipant(session: Session, reqBody: any) {
