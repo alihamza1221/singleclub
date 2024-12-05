@@ -4,7 +4,7 @@ import { Controller, getSessionFromReq } from "../lib/controller.js";
 
 export const lockSeat = async (req: any, res: any) => {
   const controller = new Controller();
-
+  console.log("lock_seat.ts: lockSeat: req.body: ", req.body);
   try {
     const session = getSessionFromReq(req);
     const reqBody = req.body;

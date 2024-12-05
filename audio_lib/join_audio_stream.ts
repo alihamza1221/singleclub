@@ -4,7 +4,7 @@ import { Controller, JoinStreamParams } from "../lib/controller.js";
 
 export const joinAudioStream = async (req: any, res: any) => {
   const controller = new Controller();
-  console.log("joining ...........");
+
   try {
     const reqBody = req.body;
     const response = await controller.joinAudioStream(

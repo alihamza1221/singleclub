@@ -224,6 +224,7 @@ export class Controller {
     at.addGrant({
       room: roomName,
       roomJoin: true,
+      canPublish: true,
       canPublishSources: [TrackSource.MICROPHONE],
       canSubscribe: true,
       roomAdmin: true,
@@ -243,6 +244,7 @@ export class Controller {
         })),
       },
     };
+    console.log("metadata::", metadata);
     await this.roomService.createRoom({
       name: roomName,
       metadata: JSON.stringify(metadata),
@@ -290,9 +292,6 @@ export class Controller {
     attributes,
     metadata = {
       isAdmin: false,
-      invited_to_stage: false,
-      roomList: true,
-      canUpdateOwnMetadata: false,
     },
   }: JoinStreamParams): Promise<JoinStreamResponse> {
     // Check for existing participant with same identity
@@ -320,13 +319,9 @@ export class Controller {
       canPublish: false,
       canSubscribe: true,
       canPublishData: true,
-      roomAdmin: !!metadata?.isAdmin,
-      roomList: !!metadata?.roomList,
-      canUpdateOwnMetadata: !!metadata?.canUpdateOwnMetadata,
     });
 
-    if (attributes) at.attributes = attributes;
-    at.metadata = JSON.stringify(metadata);
+    if (metadata) at.metadata = JSON.stringify(metadata);
     const authToken = this.createAuthToken(room_name, identity);
 
     return {
@@ -344,9 +339,6 @@ export class Controller {
     attributes,
     metadata = {
       isAdmin: false,
-      invited_to_stage: false,
-      roomList: true,
-      canUpdateOwnMetadata: false,
     },
   }: JoinStreamParams): Promise<JoinStreamResponse> {
     // Check for existing participant with same identity
@@ -375,13 +367,10 @@ export class Controller {
       canPublishSources: [TrackSource.MICROPHONE],
       canSubscribe: true,
       canPublishData: true,
-      roomAdmin: !!metadata?.isAdmin,
-      roomList: !!metadata?.roomList,
-      canUpdateOwnMetadata: !!metadata?.canUpdateOwnMetadata,
     });
 
     if (attributes) at.attributes = attributes;
-    at.metadata = JSON.stringify(metadata);
+    if (metadata) at.metadata = JSON.stringify(metadata);
     const authToken = this.createAuthToken(room_name, identity);
 
     return {
@@ -521,7 +510,7 @@ export class Controller {
       if (rooms.length === 0) {
         throw new Error("Room does not exist");
       }
-      //check only 2 users can turn video on
+      //TODO:check only 2 users can turn video on
 
       const participants = await this.roomService.listParticipants(
         session.room_name
@@ -535,7 +524,7 @@ export class Controller {
             participant.metadata
           ) as ParticipantMetadata;
           if (metadata.invited_to_stage) {
-            const isPublishingVideo = participant.tracks.some((track) => true);
+            const isPublishingVideo = participant.tracks.some((track) => false);
             if (isPublishingVideo) {
               invitedToStageCount++;
             }
@@ -612,7 +601,7 @@ export class Controller {
       return {
         message: "5 person on call. Wait for availability",
       };
-    else return {};
+    else return { message: "success invited to stage" };
   }
 
   async lockSeat(
@@ -646,6 +635,7 @@ export class Controller {
     //update the seat and set locked
 
     if (roomMetaData) {
+      console.log("before::roommeta", roomMetaData);
       const seat = roomMetaData.seats?.find((s) => s.id === seatId);
       if (seat) {
         seat.locked = state;
@@ -653,7 +643,7 @@ export class Controller {
         seat.occupied = false;
       }
     }
-
+    console.log("after::roommeta", roomMetaData);
     //update metadata
     await this.roomService.updateRoomMetadata(
       session.room_name,
@@ -685,8 +675,9 @@ export class Controller {
 
     const metadata = this.getOrCreateParticipantMetadata(participant);
 
-    if (seatId == -1 && metadata.reqSeatId) {
+    if (seatId == -1 && metadata.reqSeatId && metadata.reqSeatId != -1) {
       seatId = metadata.reqSeatId;
+      metadata.reqSeatId = -1;
     }
     const requesterInfo = await this.roomService.getParticipant(
       session.room_name,
@@ -709,6 +700,7 @@ export class Controller {
       metadata.invited_to_stage = false;
       permission.canPublish = false;
       metadata.requested_to_call = false;
+      seatId = -1;
     }
     // If  invited to stage, then we let the put them on stage
     else if (metadata.requested_to_call) {
@@ -721,7 +713,7 @@ export class Controller {
 
       //update seat
       if (roomMetadata && roomMetadata.seats) {
-        if (seatId) {
+        if (seatId != -1) {
           const seat = roomMetadata.seats.find((s) => s.id === seatId);
           if (seat && !seat.occupied && !seat.locked) {
             seat.occupied = true;
@@ -747,12 +739,13 @@ export class Controller {
 
       //update seat
       if (roomMetadata && roomMetadata.seats) {
-        if (seatId) {
+        if (seatId != -1) {
           const seat = roomMetadata.seats.find((s) => s.id === seatId);
           if (seat && !seat.occupied && !seat.locked) {
             seat.occupied = true;
             seat.assignedParticipant = identity;
             metadata.seatId = seat.id;
+            roomMetadata.seats[seat.id - 1] = seat;
           }
         } else {
           //assign to available seat
@@ -761,6 +754,7 @@ export class Controller {
             seat.occupied = true;
             seat.assignedParticipant = identity;
             metadata.seatId = seat.id;
+            roomMetadata.seats[seat.id - 1] = seat;
           }
         }
       }
@@ -774,12 +768,13 @@ export class Controller {
 
       //update seat
       if (roomMetadata && roomMetadata.seats) {
-        if (seatId) {
+        if (seatId != -1) {
           const seat = roomMetadata.seats.find((s) => s.id === seatId);
           if (seat && !seat.occupied && !seat.locked) {
             seat.occupied = true;
             seat.assignedParticipant = identity;
             metadata.seatId = seat.id;
+            roomMetadata.seats[seat.id - 1] = seat;
           }
         } else {
           //assign to available seat
@@ -788,6 +783,7 @@ export class Controller {
             seat.occupied = true;
             seat.assignedParticipant = identity;
             metadata.seatId = seat.id;
+            roomMetadata.seats[seat.id - 1] = seat;
           }
         }
       }
@@ -799,6 +795,9 @@ export class Controller {
       JSON.stringify(metadata),
       permission
     );
+
+    console.log("updated metadata", roomMetadata);
+    console.log("metadata", metadata);
     await this.roomService.updateRoomMetadata(
       session.room_name,
       JSON.stringify(roomMetadata)
@@ -867,6 +866,8 @@ export class Controller {
 
     const room = rooms[0];
 
+    console.log("req to pre", session, seatId);
+
     if (rooms.length === 0 || !session.identity) {
       throw new Error("Room does not exist");
     }
@@ -876,6 +877,9 @@ export class Controller {
     );
     const permission = participant.permission || ({} as ParticipantPermission);
     const metadata = this.getOrCreateParticipantMetadata(participant);
+    if (metadata.invited_to_stage) return { message: "Already on stage" };
+    if (metadata.reqToPresent)
+      return { message: "Already requested to present" };
     metadata.reqToPresent = true;
     metadata.reqSeatId = seatId;
 
@@ -883,37 +887,55 @@ export class Controller {
       session.room_name,
       "audio-only"
     );
+    try {
+      // If approved and invited to stage, then we let the put them on stage
+      if (metadata.requested_to_call && validNumPublication) {
+        permission.canPublish = true;
+        metadata.invited_to_stage = true;
+        metadata.requested_to_call = false;
+        metadata.reqToPresent = false;
+        if (metadata.reqSeatId != -1) metadata.seatId = metadata.reqSeatId;
+        if (seatId != -1) metadata.seatId = seatId;
+        metadata.reqSeatId = -1;
 
-    // If approved and invited to stage, then we let the put them on stage
-    if (metadata.requested_to_call && validNumPublication) {
-      permission.canPublish = true;
-      metadata.invited_to_stage = true;
-      metadata.requested_to_call = false;
-      metadata.reqToPresent = false;
-      metadata.seatId = seatId;
-
-      const roomMetaData =
-        room.metadata && (JSON.parse(room.metadata) as RoomMetadata);
-      if (roomMetaData && roomMetaData.seats) {
-        const seat = roomMetaData.seats.find((seat) => seat.id == seatId);
-        if (seat) {
-          seat.assignedParticipant = session.identity;
-          seat.locked = false;
-          seat.occupied = true;
+        //update the seat
+        const roomMetaData =
+          room.metadata && (JSON.parse(room.metadata) as RoomMetadata);
+        if (roomMetaData && roomMetaData.seats) {
+          const seat = roomMetaData.seats.find((seat) => seat.id == seatId);
+          if (seat) {
+            seat.assignedParticipant = session.identity;
+            seat.locked = false;
+            seat.occupied = true;
+          } else {
+            // place on seat isunlocked and not occupied
+            const seat = roomMetaData.seats.find(
+              (seat) => !seat.occupied && !seat.locked
+            );
+            if (seat) {
+              seat.assignedParticipant = session.identity;
+              seat.locked = false;
+              seat.occupied = true;
+            }
+          }
+          await this.roomService.updateRoomMetadata(
+            session.room_name,
+            JSON.stringify(roomMetaData)
+          );
         }
-        this.roomService.updateRoomMetadata(
-          session.room_name,
-          JSON.stringify(roomMetaData)
-        );
       }
-    }
 
-    await this.roomService.updateParticipant(
-      session.room_name,
-      session.identity,
-      JSON.stringify(metadata),
-      permission
-    );
+      await this.roomService.updateParticipant(
+        session.room_name,
+        session.identity,
+        JSON.stringify(metadata),
+        permission
+      );
+    } catch (e) {
+      return {
+        message: e,
+      };
+    }
     return {
       message: "Success",
     };
@@ -921,7 +943,7 @@ export class Controller {
 
   async toggleRequestedToCall(
     session: Session,
-    { identity, setFalse }: ToggleRequestedToCallParams
+    { identity, setFalse = false }: ToggleRequestedToCallParams
   ) {
     const rooms = await this.roomService.listRooms([session.room_name]);
 
@@ -933,10 +955,15 @@ export class Controller {
 
     const creator_identity = (JSON.parse(room.metadata) as RoomMetadata)
       .creator_identity;
+
+    if (creator_identity != session.identity && !identity) {
+      identity = session.identity;
+    }
     const participant = await this.roomService.getParticipant(
       session.room_name,
       identity
     );
+
     const metadata = this.getOrCreateParticipantMetadata(participant);
 
     const requesterInfo = await this.roomService.getParticipant(
@@ -947,7 +974,7 @@ export class Controller {
       this.getOrCreateParticipantMetadata(requesterInfo);
 
     if (
-      (!setFalse || setFalse != true) &&
+      !setFalse &&
       creator_identity !== session.identity &&
       !requesterMetaData?.isAdmin
     ) {
@@ -998,103 +1025,116 @@ export class Controller {
 
   async toggleRequestedToCallAudio(
     session: Session,
-    { identity, setFalse }: ToggleRequestedToCallParams
+    { identity, setFalse = false }: ToggleRequestedToCallParams
   ) {
-    const rooms = await this.roomService.listRooms([session.room_name]);
+    try {
+      const rooms = await this.roomService.listRooms([session.room_name]);
 
-    if (rooms.length === 0) {
-      throw new Error("Room does not exist");
-    }
+      if (rooms.length === 0) {
+        throw new Error("Room does not exist");
+      }
+      console.log("toggle", session, identity, setFalse);
 
-    const room = rooms[0];
+      const room = rooms[0];
 
-    const creator_identity = (JSON.parse(room.metadata) as RoomMetadata)
-      .creator_identity;
-    const participant = await this.roomService.getParticipant(
-      session.room_name,
-      identity
-    );
-    const metadata = this.getOrCreateParticipantMetadata(participant);
+      const creator_identity = (JSON.parse(room.metadata) as RoomMetadata)
+        .creator_identity;
+      if (creator_identity != session.identity && !identity) {
+        identity = session.identity;
+      }
+      const participant = await this.roomService.getParticipant(
+        session.room_name,
+        identity
+      );
+      const metadata = this.getOrCreateParticipantMetadata(participant);
 
-    const requesterInfo = await this.roomService.getParticipant(
-      session.room_name,
-      session.identity
-    );
-    const requesterMetaData =
-      this.getOrCreateParticipantMetadata(requesterInfo);
+      const requesterInfo = await this.roomService.getParticipant(
+        session.room_name,
+        session.identity
+      );
+      const requesterMetaData =
+        this.getOrCreateParticipantMetadata(requesterInfo);
 
-    if (
-      (!setFalse || setFalse != true) &&
-      creator_identity !== session.identity &&
-      !requesterMetaData?.isAdmin
-    ) {
-      throw new Error("Only the Admin can set this to true");
-    }
+      if (
+        !setFalse &&
+        creator_identity !== session.identity &&
+        !requesterMetaData?.isAdmin
+      ) {
+        throw new Error("Only the Admin can set this to true");
+      }
 
-    const permission = participant.permission || ({} as ParticipantPermission);
-    metadata.requested_to_call = true;
+      const permission =
+        participant.permission || ({} as ParticipantPermission);
+      metadata.requested_to_call = true;
 
-    if (setFalse) {
-      metadata.requested_to_call = false;
-      metadata.invited_to_stage = false;
-      metadata.seatId = -1;
-      metadata.reqSeatId = -1;
+      if (setFalse) {
+        metadata.requested_to_call = false;
+        metadata.invited_to_stage = false;
+        metadata.reqToPresent = false;
+
+        metadata.seatId = -1;
+        metadata.reqSeatId = -1;
+        await this.roomService.updateParticipant(
+          session.room_name,
+          identity,
+          JSON.stringify(metadata),
+          permission
+        );
+        return { message: "success removed requested to call" };
+      }
+      const validNumPublication = await this.validateNumPublication(
+        session.room_name,
+        "audio-only"
+      );
+      //only 9 publishers are allowed
+      if (!validNumPublication) {
+        metadata.invited_to_stage = false;
+        permission.canPublish = false;
+        metadata.requested_to_call = false;
+      }
+      //make speaker
+      else if (metadata.reqToPresent) {
+        metadata.requested_to_call = false;
+        permission.canPublish = true;
+        metadata.invited_to_stage = true;
+        metadata.reqToPresent = false;
+
+        //update the audio room
+
+        metadata.seatId = metadata.reqSeatId;
+        metadata.reqSeatId = -1;
+        const roomMetaData =
+          room.metadata && (JSON.parse(room.metadata) as RoomMetadata);
+
+        if (roomMetaData && metadata.reqSeatId != -1) {
+          const seat = roomMetaData.seats?.find(
+            (seat) => seat.id == metadata.seatId
+          );
+          if (seat) {
+            seat.assignedParticipant = identity;
+            seat.occupied = true;
+          }
+
+          await this.roomService.updateRoomMetadata(
+            session.room_name,
+            JSON.stringify(roomMetaData)
+          );
+        }
+      }
       await this.roomService.updateParticipant(
         session.room_name,
         identity,
         JSON.stringify(metadata),
         permission
       );
-      return { message: "success removed requested to call" };
+
+      if (!validNumPublication)
+        return { message: "9 person on video. Wait for availability" };
+    } catch (e) {
+      return {
+        message: e,
+      };
     }
-    const validNumPublication = await this.validateNumPublication(
-      session.room_name,
-      "audio-only"
-    );
-    //only 9 publishers are allowed
-    if (!validNumPublication) {
-      metadata.invited_to_stage = false;
-      permission.canPublish = false;
-      metadata.requested_to_call = false;
-    }
-    //make speaker
-    else if (metadata.reqToPresent) {
-      metadata.requested_to_call = false;
-      permission.canPublish = true;
-      metadata.invited_to_stage = true;
-      metadata.reqToPresent = false;
-
-      //update the audio room
-
-      metadata.seatId = metadata.reqSeatId;
-      metadata.reqSeatId = -1;
-      const roomMetaData =
-        room.metadata && (JSON.parse(room.metadata) as RoomMetadata);
-
-      if (roomMetaData && metadata.reqSeatId != -1) {
-        const seat = roomMetaData.seats?.find(
-          (seat) => seat.id == metadata.seatId
-        );
-        if (seat) {
-          seat.assignedParticipant = identity;
-          seat.occupied = true;
-        }
-
-        await this.roomService.updateRoomMetadata(
-          session.room_name,
-          JSON.stringify(roomMetaData)
-        );
-      }
-    }
-    await this.roomService.updateParticipant(
-      session.room_name,
-      identity,
-      JSON.stringify(metadata),
-      permission
-    );
-
-    if (!validNumPublication)
-      return { message: "9 person on video. Wait for availability" };
     return { message: "success requested to call" };
   }
 
@@ -1140,8 +1180,6 @@ export class Controller {
 
     for (const r of roomsList) {
       const metadata = r.metadata && (JSON.parse(r.metadata) as RoomMetadata);
-      //@ts-ignore
-      console.log(" room:", r.name, "with metadata type:", metadata?.type);
       if (r.name && metadata && metadata.type === "audio-only") {
         const roomparticipants = await this.roomService.listParticipants(
           r.name
@@ -1151,7 +1189,6 @@ export class Controller {
           roomInfo: r,
           participants: roomparticipants,
         };
-        console.log("cur:", cur);
         roomWithparticipants.push(cur);
       }
     }
