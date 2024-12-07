@@ -18,6 +18,7 @@ import { rejectUserToPresent } from "../util_apis/reject_user_to_present.js";
 import { muteTracks } from "../util_apis/mute_track.js";
 import AudioRouter from "./audiolib_routes.js";
 import MultiVideoRouter from "./multi_videolib.js";
+import PkRoomRouter from "./pk_lib.js";
 config();
 
 const app = express();
@@ -29,6 +30,7 @@ app.use(cors());
 
 app.use("/audio", AudioRouter);
 app.use("/multi_video", MultiVideoRouter);
+app.use("/pk", PkRoomRouter);
 
 router.post("/create_stream", createStream);
 router.post("/invite_to_stage", inviteToStage);

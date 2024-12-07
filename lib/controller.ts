@@ -974,7 +974,7 @@ export class Controller {
     if (roomMetaData) multi_video_room = roomMetaData?.type === "multi-video";
     const validNumPublication = await this.validateNumPublication(
       session.room_name,
-      multi_video_room? "multi-video":"audio-only"
+      multi_video_room ? "multi-video" : "audio-only"
     );
     try {
       // If approved and invited to stage, then we let the put them on stage
@@ -1111,6 +1111,72 @@ export class Controller {
     return { message: "success requested to call" };
   }
 
+  //merge room
+  async PkRoomInvite(
+    session: Session,
+    {
+      room_name,
+      type = "random",
+      ttl = "1h",
+    }: {
+      room_name: string;
+      type: "random" | "team v/s" | "mutual friend";
+      ttl: string | number;
+    }
+  ) {
+    try {
+      const rooms = await this.roomService.listRooms([session.room_name]);
+
+      if (rooms.length === 0) {
+        throw new Error("Room does not exist");
+      }
+      const room = rooms[0];
+
+      const creator_identity = (JSON.parse(room.metadata) as RoomMetadata)
+        .creator_identity;
+
+      const requestedRoom = await this.roomService.listRooms([room_name]);
+      if (requestedRoom.length == 0) {
+        return { message: "Room does not exist" };
+      }
+      const reqRoomMetaData = JSON.parse(
+        requestedRoom[0].metadata
+      ) as RoomMetadata;
+
+      const creatorToInvite = reqRoomMetaData.creator_identity;
+
+      if (creator_identity !== session.identity) {
+        throw new Error("Only the Creator can set this to true");
+      }
+
+      //invite the creator to call
+      const notification = {
+        action: "invitePkRoom",
+        creator_identity: session.identity,
+        room_name: session.room_name,
+        type,
+      };
+      const strNotification = JSON.stringify(notification);
+      const encoder = new TextEncoder();
+      const data = encoder.encode(strNotification);
+
+      await this.roomService.sendData(
+        room_name,
+        data,
+        DataPacket_Kind.RELIABLE,
+        {
+          destinationIdentities: [creatorToInvite],
+        }
+      );
+      console.log("creatorInvited:", creatorToInvite, "in room", room_name);
+    } catch (e) {
+      return {
+        message: e,
+      };
+    }
+    return { message: "success Invited to call" };
+  }
+
   async toggleRequestedToCallAudio(
     session: Session,
     { identity, setFalse = false }: ToggleRequestedToCallParams
@@ -1230,6 +1296,94 @@ export class Controller {
       };
     }
     return { message: "success requested to call" };
+  }
+
+  async pkRoomMerge(
+    session: Session,
+    {
+      room_name,
+    }: {
+      room_name: string;
+    }
+  ) {
+    //Invited Creator track
+    const rooms = await this.roomService.listRooms([room_name]);
+    const room = rooms[0];
+
+    const creator_identity = (JSON.parse(room.metadata) as RoomMetadata)
+      .creator_identity;
+
+    const sourceToken = await this.generateToken(
+      session.room_name,
+      creator_identity,
+      {
+        canSubscribe: true,
+        canPublish: true,
+      }
+    );
+    const targetToken = await this.generateToken(room_name, session.identity, {
+      canSubscribe: true,
+      canPublish: true,
+    });
+
+    // attach with metadata client on frontend
+
+    /*source room participants add token to metadata */
+
+    const srcCreatorInfo = await this.roomService.getParticipant(
+      room_name,
+      creator_identity
+    );
+    if (srcCreatorInfo) {
+      const metadata = this.getOrCreateParticipantMetadata(srcCreatorInfo);
+      metadata.pkRoomToken = sourceToken;
+      await this.roomService.updateParticipant(
+        room_name,
+        srcCreatorInfo.identity,
+        JSON.stringify(metadata),
+        srcCreatorInfo.permission
+      );
+      console.log("metadata src creator", metadata);
+    }
+
+    const targCreatorInfo = await this.roomService.getParticipant(
+      session.room_name,
+      session.identity
+    );
+
+    if (targCreatorInfo) {
+      const metadata = this.getOrCreateParticipantMetadata(targCreatorInfo);
+      metadata.pkRoomToken = targetToken;
+      await this.roomService.updateParticipant(
+        session.room_name,
+        session.identity,
+        JSON.stringify(metadata),
+        targCreatorInfo.permission
+      );
+    }
+
+    return {
+      message:
+        "success provided clients with auth tokens to publish and subscribe",
+    };
+  }
+
+  generateToken(roomName: string, identity: string, permissions: any) {
+    const token = new AccessToken(
+      process.env.LIVEKIT_API_KEY!,
+      process.env.LIVEKIT_API_SECRET!,
+      {
+        identity,
+      }
+    );
+    token.addGrant({
+      room: roomName,
+      roomJoin: true,
+      canPublishData: true,
+      ...permissions,
+    });
+
+    return token.toJwt();
   }
 
   async validateNumPublication(roomName: string, type?: string) {
@@ -1663,6 +1817,7 @@ export class Controller {
       hand_raised: false,
       seatId: -1,
       reqSeatId: -1,
+      pkRoomToken: "",
     };
   }
 
