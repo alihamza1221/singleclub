@@ -2,13 +2,13 @@ import { Controller, getSessionFromReq } from "../lib/controller.js";
 
 // TODO: validate request with Zod
 
-export const userReqToPresentAudio = async (req: any, res: any) => {
-  console.log("user req to preset");
+export const EndPKRoom = async (req: any, res: any) => {
   const controller = new Controller();
 
   try {
     const session = getSessionFromReq(req);
-    const response = await controller.userReqToPresentAudio(session, req);
+
+    const response = await controller.EndPkRoom(session);
 
     return res.status(200).send(response);
   } catch (err) {

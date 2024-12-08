@@ -8,6 +8,7 @@ export const PkRoomInvite = async (req: any, res: any) => {
   try {
     const session = getSessionFromReq(req);
     const reqBody = req.body;
+    console.log("req", reqBody);
     const response = await controller.PkRoomInvite(session, reqBody);
 
     return res.status(200).send(response);

@@ -148,7 +148,7 @@ export function getSessionFromReq(req: Request): Session {
 
 export class Controller {
   private roomService: RoomServiceClient;
-
+  private endMergeRoom: boolean;
   constructor() {
     const httpUrl = process.env
       .LIVEKIT_WS_URL!.replace("wss://", "https://")
@@ -158,6 +158,7 @@ export class Controller {
       process.env.LIVEKIT_API_KEY!,
       process.env.LIVEKIT_API_SECRET!
     );
+    this.endMergeRoom = false;
   }
 
   async createStream({
@@ -253,7 +254,7 @@ export class Controller {
         })),
       },
     };
-    console.log("metadata::", metadata);
+
     await this.roomService.createRoom({
       name: roomName,
       metadata: JSON.stringify(metadata),
@@ -316,7 +317,7 @@ export class Controller {
         })),
       },
     };
-    console.log("metadata::", metadata);
+
     await this.roomService.createRoom({
       name: roomName,
       metadata: JSON.stringify(metadata),
@@ -554,6 +555,17 @@ export class Controller {
       if (rooms.length === 0) {
         throw new Error("Room does not exist");
       }
+      const room = rooms[0];
+
+      const roomMetaData =
+        room.metadata && (JSON.parse(room.metadata) as RoomMetadata);
+
+      if (roomMetaData && !roomMetaData.enable_chat) {
+        return {
+          messages: "Chat is disabled",
+        };
+      }
+
       const messageId = generateRoomId();
       const strData = JSON.stringify({
         identity: session.identity,
@@ -570,6 +582,30 @@ export class Controller {
         kind,
         sendDataOptions
       );
+
+      //in PK Mode send Messages to both rooms
+
+      if (!roomMetaData || (!roomMetaData.pkSrcTtl && !roomMetaData.pkTarTtl))
+        return {
+          message: "Data sent successfully",
+        };
+      const creator = roomMetaData.creator_identity;
+      const creatorInfo = await this.roomService.getParticipant(
+        session.room_name,
+        creator
+      );
+
+      const creatorMetaData = this.getOrCreateParticipantMetadata(creatorInfo);
+
+      if (creatorMetaData.pkRoomToken != "") {
+        const participantToken = jwt.decode(creatorMetaData.pkRoomToken);
+
+        if (participantToken) {
+          //@ts-ignore
+          const pkRoom = participantToken.video?.room;
+          await this.roomService.sendData(pkRoom, data, kind, sendDataOptions);
+        }
+      }
     } catch (err) {
       console.log(err);
     }
@@ -707,7 +743,6 @@ export class Controller {
     //update the seat and set locked
 
     if (roomMetaData) {
-      console.log("before::roommeta", roomMetaData);
       const seat = roomMetaData.seats?.find((s) => s.id === seatId);
       if (seat) {
         seat.locked = state;
@@ -881,7 +916,6 @@ export class Controller {
       permission
     );
 
-    console.log("metadata", metadata);
     await this.roomService.updateRoomMetadata(
       session.room_name,
       JSON.stringify(roomMetadata)
@@ -1112,71 +1146,304 @@ export class Controller {
   }
 
   //merge room
+  async EndPkRoom(session: Session) {
+    const rooms = await this.roomService.listRooms([session.room_name]);
+
+    if (rooms.length === 0) {
+      throw new Error("Room does not exist");
+    }
+    const room = rooms[0];
+    const srcRoomMetadata = JSON.parse(room.metadata) as RoomMetadata;
+    const creator_identity = srcRoomMetadata.creator_identity;
+
+    if (creator_identity != session.identity) {
+      return { message: "Only the Creator can set this to true" };
+    }
+
+    // getParticipant from room services and set token to ""
+
+    const creator_info = await this.roomService.getParticipant(
+      session.room_name,
+      session.identity
+    );
+
+    const creator_metadata = this.getOrCreateParticipantMetadata(creator_info);
+
+    const pkRoomToken = creator_metadata.pkRoomToken;
+
+    if (pkRoomToken != "") {
+      const targetRoomToken = jwt.decode(pkRoomToken);
+      // set to defaults
+      creator_metadata.pkRoomToken = "";
+      srcRoomMetadata.pkSrcTtl = undefined;
+      srcRoomMetadata.pkTarTtl = undefined;
+
+      if (targetRoomToken) {
+        //@ts-ignore
+        const targetRoom = targetRoomToken.video?.room;
+
+        const target_rooms = await this.roomService.listRooms([targetRoom]);
+
+        // get targetRoom metadata and creator and update tokens
+
+        const target_room_info = target_rooms[0];
+        const targetRoomMetadata = JSON.parse(
+          target_room_info.metadata
+        ) as RoomMetadata;
+        const target_creator_identity = targetRoomMetadata.creator_identity;
+
+        const target_creator_info = await this.roomService.getParticipant(
+          targetRoom,
+          target_creator_identity
+        );
+
+        const target_creator_metadata =
+          this.getOrCreateParticipantMetadata(target_creator_info);
+
+        // set to defaults
+        target_creator_metadata.pkRoomToken = "";
+        targetRoomMetadata.pkSrcTtl = undefined;
+        targetRoomMetadata.pkTarTtl = undefined;
+
+        //remove participants connections to rooms
+
+        await this.roomService.removeParticipant(
+          session.room_name,
+          target_creator_identity
+        );
+        await this.roomService.removeParticipant(targetRoom, session.identity);
+        //update the participants and rooms metadata
+
+        await this.roomService.updateParticipant(
+          session.room_name,
+          session.identity,
+          JSON.stringify(creator_metadata)
+        );
+        await this.roomService.updateParticipant(
+          targetRoom,
+          target_creator_identity,
+          JSON.stringify(target_creator_metadata)
+        );
+
+        await this.roomService.updateRoomMetadata(
+          session.room_name,
+          JSON.stringify(srcRoomMetadata)
+        );
+        await this.roomService.updateRoomMetadata(
+          targetRoom,
+          JSON.stringify(targetRoomMetadata)
+        );
+      }
+    }
+
+    return {
+      message: "Successfully removed from PK Mode",
+    };
+  }
+
+  async SetChatMessages(
+    session: Session,
+    { enable_chat = true }: { enable_chat: boolean }
+  ) {
+    const rooms = await this.roomService.listRooms([session.room_name]);
+
+    if (rooms.length === 0) {
+      throw new Error("Room does not exist");
+    }
+    const room = rooms[0];
+    const RoomMetadata = JSON.parse(room.metadata) as RoomMetadata;
+    const creator_identity = RoomMetadata.creator_identity;
+
+    if (creator_identity != session.identity) {
+      return { message: "Only the Creator can set Chat Messages Access" };
+    }
+
+    RoomMetadata.enable_chat = enable_chat;
+    // getParticipant from room services and set token to
+
+    await this.roomService.updateRoomMetadata(
+      session.room_name,
+      JSON.stringify(RoomMetadata)
+    );
+
+    // Send notification to the participant
+    const notification = {
+      action: "SetChatMessages",
+      enable_chat: enable_chat,
+    };
+    const strNotification = JSON.stringify(notification);
+    const encoder = new TextEncoder();
+    const data = encoder.encode(strNotification);
+
+    await this.roomService.sendData(
+      session.room_name,
+      data,
+      DataPacket_Kind.RELIABLE
+    );
+
+    return {
+      message: "Chat Messages Access Updated Successfully",
+    };
+  }
   async PkRoomInvite(
     session: Session,
     {
       room_name,
       type = "random",
       ttl = "1h",
+      end = false,
     }: {
-      room_name: string;
-      type: "random" | "team v/s" | "mutual friend";
-      ttl: string | number;
+      room_name?: string;
+      type?: "random" | "team v/s" | "mutual friend";
+      ttl?: string | number;
+      end?: boolean;
     }
   ) {
     try {
-      const rooms = await this.roomService.listRooms([session.room_name]);
+      if (room_name == session.room_name) {
+        return {
+          message: "Can't find room to merge!",
+        };
+      }
+      if (room_name) {
+        const response = await this.inviteToPkMode(
+          room_name,
+          session.identity,
+          session.room_name,
+          type,
+          ttl
+        );
+        if (response?.accepted) {
+          return {
+            message: response,
+          };
+        } else {
+          return {
+            message: "User declined the call",
+          };
+        }
+      }
+      const rooms = await this.roomService.listRooms();
 
-      if (rooms.length === 0) {
+      const roomsNotInPk = rooms.filter((room) => {
+        const cur_metadata = JSON.parse(room.metadata) as RoomMetadata;
+        return (
+          !cur_metadata.pkSrcTtl &&
+          !cur_metadata.pkTarTtl &&
+          room.name !== session.room_name &&
+          !cur_metadata.team_mode
+        );
+      });
+
+      if (roomsNotInPk.length === 0) {
         throw new Error("Room does not exist");
       }
-      const room = rooms[0];
 
-      const creator_identity = (JSON.parse(room.metadata) as RoomMetadata)
-        .creator_identity;
-
-      const requestedRoom = await this.roomService.listRooms([room_name]);
-      if (requestedRoom.length == 0) {
-        return { message: "Room does not exist" };
-      }
-      const reqRoomMetaData = JSON.parse(
-        requestedRoom[0].metadata
-      ) as RoomMetadata;
-
-      const creatorToInvite = reqRoomMetaData.creator_identity;
-
-      if (creator_identity !== session.identity) {
-        throw new Error("Only the Creator can set this to true");
-      }
-
-      //invite the creator to call
-      const notification = {
-        action: "invitePkRoom",
-        creator_identity: session.identity,
-        room_name: session.room_name,
-        type,
-      };
-      const strNotification = JSON.stringify(notification);
-      const encoder = new TextEncoder();
-      const data = encoder.encode(strNotification);
-
-      await this.roomService.sendData(
-        room_name,
-        data,
-        DataPacket_Kind.RELIABLE,
-        {
-          destinationIdentities: [creatorToInvite],
+      let isAccepted = false;
+      if (end) this.endMergeRoom = end;
+      while (!isAccepted && !this.endMergeRoom) {
+        const randomIndex = Math.floor(Math.random() * roomsNotInPk.length);
+        const response = await this.inviteToPkMode(
+          roomsNotInPk[randomIndex].name,
+          session.identity,
+          session.room_name,
+          type,
+          ttl
+        );
+        console.log("accepted:", response?.accepted);
+        if (response?.accepted) {
+          isAccepted = true;
         }
-      );
-      console.log("creatorInvited:", creatorToInvite, "in room", room_name);
+      }
     } catch (e) {
       return {
         message: e,
       };
     }
+    if (this.endMergeRoom) {
+      return {
+        message: "Ended Inviting New Rooms",
+      };
+    }
     return { message: "success Invited to call" };
   }
 
+  async inviteToPkMode(
+    room_name: string,
+    session_identity: string,
+    session_room_name: string,
+    type: "random" | "team v/s" | "mutual friend",
+    ttl: string | number
+  ) {
+    const rooms = await this.roomService.listRooms([session_room_name]);
+
+    if (rooms.length === 0) {
+      throw new Error("Room does not exist");
+    }
+    const room = rooms[0];
+    const creator_identity = (JSON.parse(room.metadata) as RoomMetadata)
+      .creator_identity;
+    const requestedRoom = await this.roomService.listRooms([room_name]);
+    if (requestedRoom.length == 0) {
+      return { message: "Room does not exist" };
+    }
+    const reqRoomMetaData = JSON.parse(
+      requestedRoom[0].metadata
+    ) as RoomMetadata;
+
+    const creatorToInvite = reqRoomMetaData.creator_identity;
+
+    if (creator_identity !== session_identity) {
+      throw new Error("Only the Creator can set this to true");
+    }
+
+    //invite the creator to call
+    const notification = {
+      action: "invitePkRoom",
+      creator_identity: session_identity,
+      room_name: session_room_name,
+      type,
+      ttl,
+    };
+    const strNotification = JSON.stringify(notification);
+    const encoder = new TextEncoder();
+    const data = encoder.encode(strNotification);
+
+    await this.roomService.sendData(room_name, data, DataPacket_Kind.RELIABLE, {
+      destinationIdentities: [creatorToInvite],
+    });
+    console.log("creatorInvited:", creatorToInvite, "in room", room_name);
+
+    const inviteAccepted = await this.waitForInviteResponse(
+      session_room_name,
+      5000
+    );
+
+    return { accepted: inviteAccepted };
+  }
+
+  async waitForInviteResponse(
+    session_room_name: string,
+    timeout: number
+  ): Promise<boolean> {
+    try {
+      // Wait for the specified timeout
+      await new Promise((resolve) => setTimeout(resolve, timeout));
+
+      // Fetch rooms after the timeout
+      const rooms = await this.roomService.listRooms([session_room_name]);
+      const room = rooms[0];
+      const metadata = JSON.parse(room.metadata) as RoomMetadata;
+      const accepted = !!metadata.pkSrcTtl || !!metadata.pkTarTtl;
+
+      return accepted;
+    } catch (error) {
+      console.error("Error in waitForInviteResponse:", error);
+      return false;
+    }
+  }
+
+  /* Team Mode merge */
   async toggleRequestedToCallAudio(
     session: Session,
     { identity, setFalse = false }: ToggleRequestedToCallParams
@@ -1187,7 +1454,6 @@ export class Controller {
       if (rooms.length === 0) {
         throw new Error("Room does not exist");
       }
-      console.log("toggle", session, identity, setFalse);
 
       const room = rooms[0];
 
@@ -1302,64 +1568,103 @@ export class Controller {
     session: Session,
     {
       room_name,
+      ttl = 900,
     }: {
       room_name: string;
+      ttl?: string | number;
     }
   ) {
-    //Invited Creator track
-    const rooms = await this.roomService.listRooms([room_name]);
-    const room = rooms[0];
+    try {
+      //Invited Creator track
+      const rooms = await this.roomService.listRooms([room_name]);
+      const room = rooms[0];
+      const tarRooms = await this.roomService.listRooms([session.room_name]);
 
-    const creator_identity = (JSON.parse(room.metadata) as RoomMetadata)
-      .creator_identity;
+      const tarRoom = tarRooms[0];
 
-    const sourceToken = await this.generateToken(
-      session.room_name,
-      creator_identity,
-      {
-        canSubscribe: true,
-        canPublish: true,
-      }
-    );
-    const targetToken = await this.generateToken(room_name, session.identity, {
-      canSubscribe: true,
-      canPublish: true,
-    });
+      const roomMetaData = JSON.parse(room.metadata) as RoomMetadata;
+      const targetRoomMetaData = JSON.parse(tarRoom.metadata) as RoomMetadata;
+      const creator_identity = roomMetaData.creator_identity;
 
-    // attach with metadata client on frontend
-
-    /*source room participants add token to metadata */
-
-    const srcCreatorInfo = await this.roomService.getParticipant(
-      room_name,
-      creator_identity
-    );
-    if (srcCreatorInfo) {
-      const metadata = this.getOrCreateParticipantMetadata(srcCreatorInfo);
-      metadata.pkRoomToken = sourceToken;
-      await this.roomService.updateParticipant(
-        room_name,
-        srcCreatorInfo.identity,
-        JSON.stringify(metadata),
-        srcCreatorInfo.permission
-      );
-      console.log("metadata src creator", metadata);
-    }
-
-    const targCreatorInfo = await this.roomService.getParticipant(
-      session.room_name,
-      session.identity
-    );
-
-    if (targCreatorInfo) {
-      const metadata = this.getOrCreateParticipantMetadata(targCreatorInfo);
-      metadata.pkRoomToken = targetToken;
-      await this.roomService.updateParticipant(
+      const sourceToken = await this.generateToken(
         session.room_name,
-        session.identity,
-        JSON.stringify(metadata),
-        targCreatorInfo.permission
+        creator_identity,
+        {
+          canSubscribe: true,
+          canPublish: true,
+          ttl: ttl,
+        }
       );
+      const targetToken = await this.generateToken(
+        room_name,
+        session.identity,
+        {
+          canSubscribe: true,
+          canPublish: true,
+          ttl: ttl,
+        }
+      );
+
+      // attach with metadata client on frontend
+
+      /*source room participants add token to metadata */
+
+      const srcCreatorInfo = await this.roomService.getParticipant(
+        room_name,
+        creator_identity
+      );
+      if (srcCreatorInfo) {
+        const metadata = this.getOrCreateParticipantMetadata(srcCreatorInfo);
+        metadata.pkRoomToken = sourceToken;
+        await this.roomService.updateParticipant(
+          room_name,
+          srcCreatorInfo.identity,
+          JSON.stringify(metadata),
+          srcCreatorInfo.permission
+        );
+      }
+
+      const targCreatorInfo = await this.roomService.getParticipant(
+        session.room_name,
+        session.identity
+      );
+
+      if (targCreatorInfo) {
+        const metadata = this.getOrCreateParticipantMetadata(targCreatorInfo);
+        metadata.pkRoomToken = targetToken;
+        await this.roomService.updateParticipant(
+          session.room_name,
+          session.identity,
+          JSON.stringify(metadata),
+          targCreatorInfo.permission
+        );
+      }
+
+      targetRoomMetaData.pkTarTtl = {
+        ttl: ttl,
+        createdAt: new Date().toISOString(),
+      };
+
+      roomMetaData.pkSrcTtl = {
+        ttl: ttl,
+        createdAt: new Date().toISOString(),
+      };
+
+      //update current rooms metadata
+
+      await this.roomService.updateRoomMetadata(
+        room_name,
+        JSON.stringify(roomMetaData)
+      );
+
+      await this.roomService.updateRoomMetadata(
+        session.room_name,
+        JSON.stringify(targetRoomMetaData)
+      );
+    } catch (e: any) {
+      return {
+        message: e.message,
+      };
     }
 
     return {
@@ -1368,12 +1673,13 @@ export class Controller {
     };
   }
 
-  generateToken(roomName: string, identity: string, permissions: any) {
+  async generateToken(roomName: string, identity: string, permissions: any) {
     const token = new AccessToken(
       process.env.LIVEKIT_API_KEY!,
       process.env.LIVEKIT_API_SECRET!,
       {
         identity,
+        ttl: permissions.ttl || 900,
       }
     );
     token.addGrant({
@@ -1383,7 +1689,9 @@ export class Controller {
       ...permissions,
     });
 
-    return token.toJwt();
+    const tk = await token.toJwt();
+
+    return tk;
   }
 
   async validateNumPublication(roomName: string, type?: string) {

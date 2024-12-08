@@ -19,6 +19,7 @@ import { muteTracks } from "../util_apis/mute_track.js";
 import AudioRouter from "./audiolib_routes.js";
 import MultiVideoRouter from "./multi_videolib.js";
 import PkRoomRouter from "./pk_lib.js";
+import { SetChatMessages } from "../util_apis/set_chat_messages.js";
 config();
 
 const app = express();
@@ -47,7 +48,7 @@ router.post("/make_admin", makeAdmin);
 router.post("/remove_admin", removeAdmin);
 router.post("/block_participant", blockParticipant);
 router.post("/mute_tracks", muteTracks);
-
+router.post("/set_chat_messages", SetChatMessages);
 app.use(router);
 
 app.listen(process.env.PORT || 3000, () => {
