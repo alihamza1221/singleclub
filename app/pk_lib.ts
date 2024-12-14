@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { PkRoomInvite } from "../util_apis/invite_to_pk_room.js";
-import { pkRoomMerge } from "../util_apis/pk_room_merge.js";
+import { pkRoomMerge } from "../pk_lib/pk_room_merge.js";
 import { EndPKRoom } from "../pk_lib/end_pk_room.js";
 const router = Router();
 

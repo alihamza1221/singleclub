@@ -4,7 +4,6 @@ import { inviteToStage } from "../util_apis/invite_to_stage.js";
 import { stopStream } from "../util_apis/stop_stream.js";
 import { joinStream } from "../util_apis/join_stream.js";
 import { removeFromStage } from "../util_apis/remove_from_stage.js";
-import { config } from "dotenv";
 import { roomsList } from "../util_apis/rooms_list.js";
 import cors from "cors";
 import { toggleRequestedToCall } from "../util_apis/toggle_requested_to_call.js";
@@ -20,6 +19,8 @@ import AudioRouter from "./audiolib_routes.js";
 import MultiVideoRouter from "./multi_videolib.js";
 import PkRoomRouter from "./pk_lib.js";
 import { SetChatMessages } from "../util_apis/set_chat_messages.js";
+import TeamModeRouter from "./team_mode.js";
+import { config } from "dotenv";
 config();
 
 const app = express();
@@ -32,6 +33,7 @@ app.use(cors());
 app.use("/audio", AudioRouter);
 app.use("/multi_video", MultiVideoRouter);
 app.use("/pk", PkRoomRouter);
+app.use("/team", TeamModeRouter);
 
 router.post("/create_stream", createStream);
 router.post("/invite_to_stage", inviteToStage);
