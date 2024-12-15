@@ -32,6 +32,7 @@ export type TeamMode = {
   invites: number;
   team_room: string;
   defendingTeam: boolean;
+  members: string[];
 };
 export type RoomMetadata = {
   creator_identity: string;
@@ -375,10 +376,6 @@ export class Controller {
   async joinStream({
     identity,
     room_name,
-    attributes,
-    metadata = {
-      isAdmin: false,
-    },
   }: JoinStreamParams): Promise<JoinStreamResponse> {
     // Check for existing participant with same identity
     let exists = false;
@@ -407,7 +404,6 @@ export class Controller {
       canPublishData: true,
     });
 
-    if (metadata) at.metadata = JSON.stringify(metadata);
     const authToken = this.createAuthToken(room_name, identity);
 
     return {
@@ -597,8 +593,33 @@ export class Controller {
       );
 
       //in PK Mode send Messages to both rooms
+      if (!roomMetaData) {
+        return {
+          message: "sent successful",
+        };
+      } else if (roomMetaData.team_mode) {
+        const team_room = roomMetaData.team_mode.team_room;
+        const rooms_list = await this.roomService.listRooms();
 
-      if (!roomMetaData || (!roomMetaData.pkSrcTtl && !roomMetaData.pkTarTtl))
+        for (const room of rooms_list) {
+          const room_metadata = JSON.parse(room.metadata) as RoomMetadata;
+
+          if (
+            room_metadata.team_mode?.team_room == team_room &&
+            room.name != session.room_name
+          ) {
+            await this.roomService.sendData(
+              room.name,
+              data,
+              kind,
+              sendDataOptions
+            );
+          }
+        }
+        return {
+          message: "Data sent successfully",
+        };
+      } else if (!roomMetaData.pkSrcTtl && !roomMetaData.pkTarTtl)
         return {
           message: "Data sent successfully",
         };
@@ -619,63 +640,9 @@ export class Controller {
           await this.roomService.sendData(pkRoom, data, kind, sendDataOptions);
         }
       }
-    } catch (err) {
-      console.log(err);
-    }
-  }
-
-  async sendChatMessages(
-    session: Session,
-    {
-      data: dataRec,
-      kind = DataPacket_Kind.RELIABLE,
-      mention,
-      sendDataOptions = {},
-    }: PublishDataType
-  ): Promise<any> {
-    try {
-      const rooms = await this.roomService.listRooms([session.room_name]);
-
-      if (rooms.length === 0) {
-        throw new Error("Room does not exist");
-      }
-      const room = rooms[0];
-
-      const roomMetaData =
-        room.metadata && (JSON.parse(room.metadata) as RoomMetadata);
-
-      if (roomMetaData && !roomMetaData.enable_chat) {
-        return {
-          messages: "Chat is disabled",
-        };
-      }
-
-      const messageId = generateRoomId();
-      const strData = JSON.stringify({
-        identity: session.identity,
-        data: dataRec,
-        mention,
-        messageId,
-      });
-      const encoder = new TextEncoder();
-      const data = encoder.encode(strData);
-
-      await this.roomService.sendData(
-        session.room_name,
-        data,
-        kind,
-        sendDataOptions
-      );
-
-      //in PK Mode send Messages to both rooms
-      if (roomMetaData && roomMetaData.team_mode?.team_room) {
-        await this.roomService.sendData(
-          roomMetaData.team_mode?.team_room,
-          data,
-          kind,
-          sendDataOptions
-        );
-      }
+      return {
+        message: "Data sent successfully",
+      };
     } catch (err) {
       console.log(err);
     }
@@ -1627,7 +1594,7 @@ export class Controller {
 
     //pre-checks for invites validation
 
-    if (roomMetadata.team_mode && reqRoomMetaData.team_mode) {
+    if (roomMetadata.team_mode || reqRoomMetaData.team_mode) {
       return { message: "Can't merge two team rooms" };
     } else if (roomMetadata.pkSrcTtl || roomMetadata.pkTarTtl) {
       return { message: "Already in a PK Room" };
@@ -1663,6 +1630,7 @@ export class Controller {
     timeout: number
   ): Promise<boolean> {
     try {
+      console.log("waiting for acceptance ...");
       // Wait for the specified timeout
       await new Promise((resolve) => setTimeout(resolve, timeout));
 
@@ -1909,9 +1877,26 @@ export class Controller {
 
       const roomMetaData = JSON.parse(room.metadata) as RoomMetadata;
       const targetRoomMetaData = JSON.parse(tarRoom.metadata) as RoomMetadata;
+
       const creator_identity = roomMetaData.creator_identity;
 
-      if (roomMetaData.pkSrcTtl || targetRoomMetaData.pkTarTtl) {
+      const srcCreatorInfo = await this.roomService.getParticipant(
+        room_name,
+        creator_identity
+      );
+
+      //come here
+      const targCreatorInfo = await this.roomService.getParticipant(
+        session.room_name,
+        session.identity
+      );
+
+      if (
+        roomMetaData.pkSrcTtl ||
+        roomMetaData.pkTarTtl ||
+        targetRoomMetaData.pkTarTtl
+      ) {
+        console.log("Can't find available rooms to merge");
         return {
           message: "Can't find available rooms to merge",
         };
@@ -1935,22 +1920,13 @@ export class Controller {
           ttl: ttl,
         }
       );
-
+      console.log("<Tokens available>");
       // attach with metadata client on frontend
 
       /*source room participants add token to metadata */
 
-      const srcCreatorInfo = await this.roomService.getParticipant(
-        room_name,
-        creator_identity
-      );
-
       const src_metadata = this.getOrCreateParticipantMetadata(srcCreatorInfo);
-      if (src_metadata.pkRoomToken != "") {
-        return {
-          message: "Already in a PK Room",
-        };
-      }
+
       src_metadata.pkRoomToken = sourceToken;
       await this.roomService.updateParticipant(
         room_name,
@@ -1959,18 +1935,8 @@ export class Controller {
         srcCreatorInfo.permission
       );
 
-      //come here
-      const targCreatorInfo = await this.roomService.getParticipant(
-        session.room_name,
-        session.identity
-      );
-
       const tar_metadata = this.getOrCreateParticipantMetadata(targCreatorInfo);
-      if (tar_metadata.pkRoomToken != "") {
-        return {
-          message: "Already in a PK Room",
-        };
-      }
+
       tar_metadata.pkRoomToken = targetToken;
       await this.roomService.updateParticipant(
         session.room_name,
@@ -2001,6 +1967,7 @@ export class Controller {
         JSON.stringify(targetRoomMetaData)
       );
 
+      console.log("merge success.....");
       /*send notification to room creators */
 
       const notification = {
@@ -2081,6 +2048,7 @@ export class Controller {
         message: "Success rooms merged",
       };
     } catch (e: any) {
+      console.log("error in pkRoomMerge:", e);
       return {
         message: e.message,
       };
@@ -2201,10 +2169,7 @@ export class Controller {
           const room_metadata = JSON.parse(room.metadata) as RoomMetadata;
 
           //get cur_team_rooms
-          if (
-            room_metadata.team_mode?.team_room ==
-            src_room_metadata.team_mode.team_room
-          ) {
+          if (room_metadata.team_mode?.team_room == team_room) {
             //add tar to cur_room as in same-team-room
 
             const tar_access_to_room_token = await this.generateToken(
@@ -2214,12 +2179,13 @@ export class Controller {
                 canSubscribe: true,
                 canPublish: true,
                 ttl: remaining_TTL,
-              },
-              {
-                teamMember: true,
               }
             );
 
+            //add target-creator as member for other rooms
+            room_metadata.team_mode.members.push(
+              tar_room_metadata.creator_identity
+            );
             console.log("auth token gen for tar in host room:", room.name);
             //push tokens to access_tokens_list of tar_room_creator
             if (tar_room_creator_metadata.team_access_tokens_list) {
@@ -2242,10 +2208,12 @@ export class Controller {
                 canSubscribe: true,
                 canPublish: true,
                 ttl: remaining_TTL,
-              },
-              {
-                teamMember: true,
               }
+            );
+
+            //build team-members for target room
+            tar_room_metadata.team_mode.members.push(
+              room_metadata.creator_identity
             );
 
             // step 2: update cur_room creator team_access_tokens_list
@@ -2263,9 +2231,6 @@ export class Controller {
                 team_member_access_token
               );
             } else {
-              return {
-                message: "Team_Room does not exist",
-              };
             }
 
             //step 3: update cur_room creator metadata
@@ -2274,6 +2239,11 @@ export class Controller {
               room_metadata.creator_identity,
               JSON.stringify(cur_room_creator_metadata),
               cur_room_creator_info.permission
+            );
+
+            await this.roomService.updateRoomMetadata(
+              room.name,
+              JSON.stringify(room_metadata)
             );
 
             /*Done updating cur_room & target room req */
@@ -2290,9 +2260,6 @@ export class Controller {
             canSubscribe: true,
             canPublish: true,
             ttl: ttl,
-          },
-          {
-            teamMember: true,
           }
         );
 
@@ -2303,12 +2270,11 @@ export class Controller {
             canSubscribe: true,
             canPublish: true,
             ttl: ttl,
-          },
-          {
-            teamMember: true,
           }
         );
 
+        const members_list_tar = [src_room_creator_info.identity];
+        const members_list_src = [tar_room_creator_info.identity];
         //step:2 update both rooms metadata
         src_room_metadata.team_mode = {
           team_room: team_room,
@@ -2317,6 +2283,7 @@ export class Controller {
           ttl: ttl,
           defendingTeam: true,
           createdAt: new Date().toISOString(),
+          members: members_list_src,
         };
 
         tar_room_metadata.team_mode = {
@@ -2326,6 +2293,7 @@ export class Controller {
           ttl: ttl,
           defendingTeam: false,
           createdAt: new Date().toISOString(),
+          members: members_list_tar,
         };
 
         //step:3 update both rooms creators metadata
@@ -2387,27 +2355,37 @@ export class Controller {
           if (room_metadata.team_mode?.team_room == team_room) {
             /*remove all the participants of team from cur room */
 
-            const participants = await this.roomService.listParticipants(
-              room.name
+            const cur_room_creator = await this.roomService.getParticipant(
+              room.name,
+              room_metadata.creator_identity
             );
 
-            for (const p of participants) {
-              const p_metadata = this.getOrCreateParticipantMetadata(p);
-              if (p.identity == room_metadata.creator_identity) {
-                p_metadata.team_access_tokens_list = [];
-                p_metadata.teamMember = false;
+            const cur_room_creator_metadata =
+              this.getOrCreateParticipantMetadata(cur_room_creator);
 
-                await this.roomService.updateParticipant(
+            cur_room_creator_metadata.team_access_tokens_list = [];
+
+            //clear access tokens of participants and remove from room;
+
+            const team_members = room_metadata.team_mode.members;
+
+            try {
+              for (const member_identity of team_members) {
+                await this.roomService.removeParticipant(
                   room.name,
-                  p.identity,
-                  JSON.stringify(p_metadata),
-                  p.permission
+                  member_identity
                 );
-              } else if (p_metadata.teamMember) {
-                await this.roomService.removeParticipant(room.name, p.identity);
               }
+            } catch (e) {
+              console.log("cleanup rooms team members", e);
             }
 
+            await this.roomService.updateParticipant(
+              room.name,
+              cur_room_creator.identity,
+              JSON.stringify(cur_room_creator_metadata),
+              cur_room_creator.permission
+            );
             room_metadata.team_mode = undefined;
 
             await this.roomService.updateRoomMetadata(
@@ -2449,7 +2427,7 @@ export class Controller {
   async generateToken(
     roomName: string,
     identity: string,
-    permissions: any,
+    permissions: any = {},
     metadata: any = {}
   ) {
     const token = new AccessToken(
@@ -2467,19 +2445,6 @@ export class Controller {
       ...permissions,
     });
 
-    // Update participant metadata
-    const participantInfo = await this.roomService.getParticipant(
-      roomName,
-      identity
-    );
-
-    // update the metadata
-    await this.roomService.updateParticipant(
-      roomName,
-      identity,
-      JSON.stringify(metadata),
-      participantInfo.permission
-    );
     const tk = await token.toJwt();
 
     return tk;
@@ -2496,6 +2461,17 @@ export class Controller {
     ) as RoomMetadata;
 
     const team_room = requester_room_metadata.team_mode?.team_room;
+
+    if (
+      !team_room ||
+      session.identity != requester_room_metadata.creator_identity ||
+      session.identity != requester_room_metadata.team_mode?.team_admin
+    ) {
+      console.log("end-team: only admins can send end request");
+      return {
+        message: "Only the admins can end the team room",
+      };
+    }
     const all_rooms = await this.roomService.listRooms();
 
     for (const room of all_rooms) {
@@ -2506,23 +2482,34 @@ export class Controller {
       if (room_metadata.team_mode?.team_room == team_room) {
         /*remove all the participants of team from cur room */
 
-        const participants = await this.roomService.listParticipants(room.name);
+        const cur_room_creator = await this.roomService.getParticipant(
+          room.name,
+          room_metadata.creator_identity
+        );
 
-        for (const p of participants) {
-          const p_metadata = this.getOrCreateParticipantMetadata(p);
-          if (p.identity == room_metadata.creator_identity) {
-            p_metadata.team_access_tokens_list = [];
-            p_metadata.teamMember = false;
+        const cur_room_creator_metadata =
+          this.getOrCreateParticipantMetadata(cur_room_creator);
 
-            await this.roomService.updateParticipant(
+        cur_room_creator_metadata.team_access_tokens_list = [];
+        await this.roomService.updateParticipant(
+          room.name,
+          cur_room_creator.identity,
+          JSON.stringify(cur_room_creator_metadata),
+          cur_room_creator.permission
+        );
+        //clear access tokens of participants and remove from room;
+
+        const team_members = room_metadata.team_mode.members;
+
+        try {
+          for (const member_identity of team_members) {
+            await this.roomService.removeParticipant(
               room.name,
-              p.identity,
-              JSON.stringify(p_metadata),
-              p.permission
+              member_identity
             );
-          } else if (p_metadata.teamMember) {
-            await this.roomService.removeParticipant(room.name, p.identity);
           }
+        } catch (e) {
+          console.log("cleanup rooms team members", e);
         }
 
         room_metadata.team_mode = undefined;
@@ -2531,7 +2518,150 @@ export class Controller {
           room.name,
           JSON.stringify(room_metadata)
         );
-        /*Done  deletion of team room*/
+        /*Done  cleanup run after ttl expires*/
+      }
+    }
+  }
+
+  // Remove RemoveTeamMember
+  async RemoveTeamMember(session: Session, { identity }: { identity: string }) {
+    const s_rooms = await this.roomService.listRooms([session.room_name]);
+
+    const s_room = s_rooms[0];
+    const s_room_metadata = JSON.parse(s_room.metadata) as RoomMetadata;
+
+    const s_room_team_admin = s_room_metadata.team_mode?.team_admin;
+
+    if (
+      !(identity == session.identity) ||
+      !(session.identity == s_room_team_admin)
+    ) {
+      return {
+        message: "Only the admin or member himself can perform removal",
+      };
+    }
+
+    //step: 1
+    const p = await this.roomService.getParticipant(
+      session.room_name,
+      identity
+    );
+    const p_metadata = this.getOrCreateParticipantMetadata(p);
+    p_metadata.team_access_tokens_list = [];
+
+    //step: 2  remove all team members from cur_room
+    const from_room = await this.find_room_from_creator_identity(
+      identity,
+      s_room_metadata.team_mode?.team_room
+    );
+
+    if (!from_room) {
+      console.log("can't find team room of creator");
+      return {
+        message: "can't find team room of creator",
+      };
+    }
+
+    const from_room_metadata = JSON.parse(from_room.metadata) as RoomMetadata;
+    if (!from_room_metadata.team_mode) {
+      return {
+        message: "can't find team room of creator",
+      };
+    }
+    const team_members = from_room_metadata.team_mode.members;
+    for (const member of team_members) {
+      await this.roomService.removeParticipant(from_room.name, member);
+    }
+
+    //step: 3 remove team_mode -> r.metadata
+    from_room_metadata.team_mode = undefined;
+    await this.roomService.updateRoomMetadata(
+      from_room.name,
+      JSON.stringify(from_room_metadata)
+    );
+
+    //step: 4
+
+    const all_rooms = await this.roomService.listRooms();
+
+    for (const room of all_rooms) {
+      //get room metadata
+      const room_metadata = JSON.parse(room.metadata) as RoomMetadata;
+      if (
+        room_metadata.team_mode?.team_room ==
+          s_room_metadata.team_mode?.team_room &&
+        room.name != from_room.name
+      ) {
+        /*get access tokens find from_room equivalent and remove token*/
+        const cur_room_creator = await this.roomService.getParticipant(
+          room.name,
+          room_metadata.creator_identity
+        );
+
+        const cur_room_creator_metadata =
+          this.getOrCreateParticipantMetadata(cur_room_creator);
+
+        const access_tokens = cur_room_creator_metadata.team_access_tokens_list;
+        if (!access_tokens)
+          throw new Error("can't find access list in other team members");
+
+        const updated_access_list = access_tokens.filter((token) => {
+          const decoded_user_token = jwt.decode(token);
+
+          //@ts-ignore
+          if (decoded_user_token && decoded_user_token.video?.room) {
+            //@ts-ignore
+            return decoded_user_token.video?.room !== from_room.name;
+          }
+
+          // If the token doesn't have the expected structure, keep it in the list
+          return true;
+        });
+
+        cur_room_creator_metadata.team_access_tokens_list = updated_access_list;
+
+        await this.roomService.updateParticipant(
+          room.name,
+          cur_room_creator.identity,
+          JSON.stringify(cur_room_creator_metadata),
+          cur_room_creator.permission
+        );
+        //update members list from team_mode
+
+        if (room_metadata.team_mode) {
+          const team_members = room_metadata.team_mode?.members;
+          const updated_team_members = team_members.filter(
+            (member) => member !== identity
+          );
+          room_metadata.team_mode.members = updated_team_members;
+
+          //remove from room
+
+          await this.roomService.removeParticipant(room.name, identity);
+        }
+        await this.roomService.updateRoomMetadata(
+          room.name,
+          JSON.stringify(room_metadata)
+        );
+      }
+    }
+  }
+
+  async find_room_from_creator_identity(
+    identity: string,
+    team_room: string | undefined
+  ) {
+    const all_rooms = await this.roomService.listRooms();
+    for (const room of all_rooms) {
+      const room_metadata = JSON.parse(room.metadata) as RoomMetadata;
+
+      //check creator and team_room
+      if (!room_metadata.team_mode?.team_room) continue;
+      if (
+        room_metadata.creator_identity == identity &&
+        room_metadata.team_mode?.team_room == team_room
+      ) {
+        return room;
       }
     }
   }
