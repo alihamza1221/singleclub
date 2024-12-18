@@ -2159,7 +2159,7 @@ export class Controller {
 
         src_room_metadata.team_mode.invites =
           src_room_metadata.team_mode.invites + 1;
-        tar_room_metadata.team_mode = src_room_metadata.team_mode;
+        tar_room_metadata.team_mode = { ...src_room_metadata.team_mode };
         tar_room_metadata.team_mode.invites = 0;
         tar_room_metadata.team_mode.members = [];
 
@@ -2188,6 +2188,22 @@ export class Controller {
               tar_room_metadata.creator_identity
             );
 
+            console.log(
+              "prev -> ",
+              tar_room_metadata.team_mode.members,
+              "room-name: ",
+              tar_room.name,
+              "creator:",
+              tar_room_metadata.creator_identity,
+              "\nto add-> ",
+              room_metadata.creator_identity
+            );
+            //build team-members for target room
+            tar_room_metadata.team_mode.members.push(
+              room_metadata.creator_identity
+            );
+
+            console.log("log 1 -> ", tar_room_metadata.team_mode.members);
             //push tokens to access_tokens_list of tar_room_creator
             if (tar_room_creator_metadata.team_access_tokens_list) {
               tar_room_creator_metadata.team_access_tokens_list.push(
@@ -2198,6 +2214,8 @@ export class Controller {
                 tar_access_to_room_token,
               ];
             }
+
+            console.log("log 2 -> ", tar_room_metadata.team_mode.members);
 
             //generate access token for other rooms in team to join target(invited) room
 
@@ -2212,12 +2230,8 @@ export class Controller {
               }
             );
 
-            //build team-members for target room
-            tar_room_metadata.team_mode.members.push(
-              room_metadata.creator_identity
-            );
-
             // step 2: update cur_room creator team_access_tokens_list
+            console.log("log 3 -> ", tar_room_metadata.team_mode.members);
 
             const cur_room_creator_info = await this.roomService.getParticipant(
               room.name,
@@ -2227,13 +2241,10 @@ export class Controller {
             const cur_room_creator_metadata =
               this.getOrCreateParticipantMetadata(cur_room_creator_info);
 
-            console.log(
-              "   be:: list",
-              cur_room_creator_metadata?.team_access_tokens_list?.length
-            );
             cur_room_creator_metadata.team_access_tokens_list?.push(
               team_member_access_token
             );
+            console.log("log 4 -> ", tar_room_metadata.team_mode.members);
 
             //step 3: update cur_room creator metadata
             if (
@@ -2253,12 +2264,20 @@ export class Controller {
               JSON.stringify(cur_room_creator_metadata),
               cur_room_creator_info.permission
             );
+            console.log("added -> ", tar_room_metadata.team_mode.members);
 
             await this.roomService.updateRoomMetadata(
               room.name,
               JSON.stringify(room_metadata)
             );
 
+            // from rooom list get tar room and console metadata
+
+            console.log(
+              "after ->",
+              tar_room_metadata.team_mode?.members,
+              "\n -----------------------------"
+            );
             /*Done updating cur_room & target room req */
           }
         }
