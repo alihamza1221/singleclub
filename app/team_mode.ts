@@ -9,6 +9,7 @@ const router = Router();
 router.post("/on_pk_invite_accept", teamModeMergeRooms);
 router.post("/invite_to_team", TeamRoomInvite);
 router.post("/remove_member", RemoveTeamMember);
-router.post("send_data", sendChatMessages);
+router.post("/send_data", sendChatMessages);
 router.post("/end_team_mode", TeamModeEnd);
+
 export default router;

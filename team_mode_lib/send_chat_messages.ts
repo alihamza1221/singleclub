@@ -5,6 +5,7 @@ export const sendChatMessages = async (req: any, res: any) => {
 
   try {
     const reqBody = req.body;
+    console.log(reqBody);
     const session = getSessionFromReq(req);
     const response = await controller.sendData(session, reqBody);
 

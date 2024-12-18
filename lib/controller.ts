@@ -559,6 +559,7 @@ export class Controller {
     }: PublishDataType
   ): Promise<any> {
     try {
+      console.log("dataRec", dataRec, "session.room", session.room_name);
       const rooms = await this.roomService.listRooms([session.room_name]);
 
       if (rooms.length === 0) {
@@ -1694,7 +1695,7 @@ export class Controller {
       return { message: "Requested User already in a PK Room" };
     }
     let notification = {
-      action: "inviteToTeam",
+      action: "invitePkRoom",
       creator_identity: session.identity,
       room_name: session.room_name,
       type,
@@ -2153,16 +2154,16 @@ export class Controller {
           };
         }
 
+        const all_rooms = await this.roomService.listRooms();
         //If TTl than change states of src_room and tar_room metadata
 
         src_room_metadata.team_mode.invites =
           src_room_metadata.team_mode.invites + 1;
         tar_room_metadata.team_mode = src_room_metadata.team_mode;
         tar_room_metadata.team_mode.invites = 0;
+        tar_room_metadata.team_mode.members = [];
 
         // add the target(invited) room to each Room In same Team
-
-        const all_rooms = await this.roomService.listRooms();
 
         for (const room of all_rooms) {
           //get room metadata
@@ -2171,7 +2172,7 @@ export class Controller {
           //get cur_team_rooms
           if (room_metadata.team_mode?.team_room == team_room) {
             //add tar to cur_room as in same-team-room
-
+            console.log("--- ", room.name, "-------");
             const tar_access_to_room_token = await this.generateToken(
               room.name,
               tar_room_metadata.creator_identity,
@@ -2186,7 +2187,7 @@ export class Controller {
             room_metadata.team_mode.members.push(
               tar_room_metadata.creator_identity
             );
-            console.log("auth token gen for tar in host room:", room.name);
+
             //push tokens to access_tokens_list of tar_room_creator
             if (tar_room_creator_metadata.team_access_tokens_list) {
               tar_room_creator_metadata.team_access_tokens_list.push(
@@ -2226,17 +2227,29 @@ export class Controller {
             const cur_room_creator_metadata =
               this.getOrCreateParticipantMetadata(cur_room_creator_info);
 
-            if (cur_room_creator_metadata.team_access_tokens_list) {
-              cur_room_creator_metadata.team_access_tokens_list.push(
-                team_member_access_token
-              );
-            } else {
-            }
+            console.log(
+              "   be:: list",
+              cur_room_creator_metadata?.team_access_tokens_list?.length
+            );
+            cur_room_creator_metadata.team_access_tokens_list?.push(
+              team_member_access_token
+            );
 
             //step 3: update cur_room creator metadata
+            if (
+              src_room.name == room.name &&
+              src_room_metadata.creator_identity ==
+                room_metadata.creator_identity
+            ) {
+              src_room_creator_metadata.team_access_tokens_list =
+                cur_room_creator_metadata.team_access_tokens_list;
+
+              src_room_metadata.team_mode.members =
+                room_metadata.team_mode.members;
+            }
             await this.roomService.updateParticipant(
               room.name,
-              room_metadata.creator_identity,
+              cur_room_creator_info.identity,
               JSON.stringify(cur_room_creator_metadata),
               cur_room_creator_info.permission
             );
@@ -2340,7 +2353,7 @@ export class Controller {
         ttl = this.convertTTLToSec(ttl);
       }
       setTimeout(async () => {
-        console.log("Clearing team room......", team_room);
+        console.log("Clearing team room......", team_room, "cur ttl:", ttl);
 
         if (src_room_metadata_team_mode || tar_room_metadata_team_mode) {
           return;
@@ -2395,7 +2408,7 @@ export class Controller {
             /*Done  cleanup run after ttl expires*/
           }
         }
-      }, ttl);
+      }, ttl * 1000);
     } catch (e: any) {
       return {
         message: e.message,
@@ -2464,7 +2477,6 @@ export class Controller {
 
     if (
       !team_room ||
-      session.identity != requester_room_metadata.creator_identity ||
       session.identity != requester_room_metadata.team_mode?.team_admin
     ) {
       console.log("end-team: only admins can send end request");
@@ -2497,19 +2509,37 @@ export class Controller {
           JSON.stringify(cur_room_creator_metadata),
           cur_room_creator.permission
         );
+
+        /** for testing only */
+        const temp_cre = await this.roomService.getParticipant(
+          room.name,
+          room_metadata.creator_identity
+        );
+        const temp_cre_metadata = this.getOrCreateParticipantMetadata(temp_cre);
+
+        console.log("temp_cre_metadata", temp_cre_metadata);
         //clear access tokens of participants and remove from room;
 
         const team_members = room_metadata.team_mode.members;
 
+        console.log(
+          "room",
+          room.name,
+          "team_members",
+          team_members,
+          "creator: ",
+          room_metadata.creator_identity
+        );
         try {
           for (const member_identity of team_members) {
             await this.roomService.removeParticipant(
               room.name,
               member_identity
             );
+            console.log("removed --", member_identity);
           }
         } catch (e) {
-          console.log("cleanup rooms team members", e);
+          console.log("Unable to remove participant", e);
         }
 
         room_metadata.team_mode = undefined;
@@ -2518,6 +2548,13 @@ export class Controller {
           room.name,
           JSON.stringify(room_metadata)
         );
+
+        /**for testing */
+        const temp_room = await this.roomService.listRooms([room.name]);
+        const temp_room_metadata = JSON.parse(
+          temp_room[0].metadata
+        ) as RoomMetadata;
+        console.log("up:team_mode", temp_room_metadata.team_mode);
         /*Done  cleanup run after ttl expires*/
       }
     }
