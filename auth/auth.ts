@@ -1,5 +1,6 @@
 import { NextFunction } from "express";
-
+import { config } from "dotenv";
+config();
 const validTokens = process.env.VALID_TOKENS?.split(",") || [];
 
 export const authenticate = (req: any, res: any, next: NextFunction) => {
