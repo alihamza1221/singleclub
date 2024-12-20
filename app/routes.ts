@@ -23,6 +23,10 @@ import TeamModeRouter from "./team_mode.js";
 import AuthRouter from "./auth.js";
 import { authenticate } from "../auth/auth.js";
 import { config } from "dotenv";
+import { getSingleLiveStream } from "../data_apis/get_single_live_stream.js";
+import { getAudioLiveStream } from "../data_apis/get_audio_live_stream.js";
+import { getMultiLiveStream } from "../data_apis/get_multi_live_stream.js";
+import { getPkRoom } from "../data_apis/get_pk_room.js";
 config();
 
 const app = express();
@@ -45,6 +49,12 @@ router.use((req, res, next) => {
   }
   authenticate(req, res, next);
 });
+
+// Define the new global APIs
+router.get("/sdk/get_single_live_stream", getSingleLiveStream);
+router.get("/sdk/get_audio_live_stream", getAudioLiveStream);
+router.get("/sdk/get_multi_live_stream", getMultiLiveStream);
+router.get("/sdk/get_pk_room", getPkRoom);
 
 router.post("/create_stream", createStream);
 router.post("/invite_to_stage", inviteToStage);
