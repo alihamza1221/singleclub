@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
-
+import { config } from "dotenv";
+config();
 const SECRET_KEY = process.env.SECRET_KEY as string;
 
 /*Route to get Access Token */
