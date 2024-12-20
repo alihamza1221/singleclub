@@ -1856,49 +1856,55 @@ export class Controller {
 
       //come up
       setTimeout(async () => {
-        const srcCreatorInfo = await this.roomService.getParticipant(
-          room_name,
-          creator_identity
-        );
-        const src_metadata =
-          this.getOrCreateParticipantMetadata(srcCreatorInfo);
+        try {
+          const srcCreatorInfo = await this.roomService.getParticipant(
+            room_name,
+            creator_identity
+          );
+          const src_metadata =
+            this.getOrCreateParticipantMetadata(srcCreatorInfo);
 
-        if (src_metadata.pkRoomToken != sourceToken) {
+          if (src_metadata.pkRoomToken != sourceToken) {
+            return {
+              message: "PK mode closed TTL expired",
+            };
+          }
+          src_metadata.pkRoomToken = "";
+          await this.roomService.updateParticipant(
+            room_name,
+            creator_identity,
+            JSON.stringify(src_metadata),
+            srcCreatorInfo.permission
+          );
+          tar_metadata.pkRoomToken = "";
+          await this.roomService.updateParticipant(
+            session.room_name,
+            session.identity,
+            JSON.stringify(tar_metadata),
+            targCreatorInfo.permission
+          );
+
+          targetRoomMetaData.pkTarTtl = undefined;
+          roomMetaData.pkSrcTtl = undefined;
+
+          await this.roomService.updateRoomMetadata(
+            room_name,
+            JSON.stringify(roomMetaData)
+          );
+
+          await this.roomService.updateRoomMetadata(
+            session.room_name,
+            JSON.stringify(targetRoomMetaData)
+          );
+
           return {
             message: "PK mode closed TTL expired",
           };
+        } catch (e: any) {
+          return {
+            message: e.message,
+          };
         }
-        src_metadata.pkRoomToken = "";
-        await this.roomService.updateParticipant(
-          room_name,
-          creator_identity,
-          JSON.stringify(src_metadata),
-          srcCreatorInfo.permission
-        );
-        tar_metadata.pkRoomToken = "";
-        await this.roomService.updateParticipant(
-          session.room_name,
-          session.identity,
-          JSON.stringify(tar_metadata),
-          targCreatorInfo.permission
-        );
-
-        targetRoomMetaData.pkTarTtl = undefined;
-        roomMetaData.pkSrcTtl = undefined;
-
-        await this.roomService.updateRoomMetadata(
-          room_name,
-          JSON.stringify(roomMetaData)
-        );
-
-        await this.roomService.updateRoomMetadata(
-          session.room_name,
-          JSON.stringify(targetRoomMetaData)
-        );
-
-        return {
-          message: "PK mode closed TTL expired",
-        };
       }, ttl * 1000);
 
       return {
@@ -2228,7 +2234,12 @@ export class Controller {
                 this.getOrCreateParticipantMetadata(cur_room_creator);
 
               cur_room_creator_metadata.team_access_tokens_list = [];
-
+              await this.roomService.updateParticipant(
+                room.name,
+                cur_room_creator.identity,
+                JSON.stringify(cur_room_creator_metadata),
+                cur_room_creator.permission
+              );
               //clear access tokens of participants and remove from room;
 
               const team_members = room_metadata.team_mode.members;
@@ -2246,12 +2257,6 @@ export class Controller {
                 };
               }
 
-              await this.roomService.updateParticipant(
-                room.name,
-                cur_room_creator.identity,
-                JSON.stringify(cur_room_creator_metadata),
-                cur_room_creator.permission
-              );
               room_metadata.team_mode = undefined;
 
               await this.roomService.updateRoomMetadata(
@@ -2366,13 +2371,6 @@ export class Controller {
           JSON.stringify(cur_room_creator_metadata),
           cur_room_creator.permission
         );
-
-        /** for testing only */
-        const temp_cre = await this.roomService.getParticipant(
-          room.name,
-          room_metadata.creator_identity
-        );
-        const temp_cre_metadata = this.getOrCreateParticipantMetadata(temp_cre);
 
         //clear access tokens of participants and remove from room;
 
