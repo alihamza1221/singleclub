@@ -20,6 +20,8 @@ import MultiVideoRouter from "./multi_videolib.js";
 import PkRoomRouter from "./pk_lib.js";
 import { SetChatMessages } from "../util_apis/set_chat_messages.js";
 import TeamModeRouter from "./team_mode.js";
+import AuthRouter from "./auth.js";
+import { authenticate } from "../auth/auth.js";
 import { config } from "dotenv";
 config();
 
@@ -34,6 +36,15 @@ app.use("/audio", AudioRouter);
 app.use("/multi_video", MultiVideoRouter);
 app.use("/pk", PkRoomRouter);
 app.use("/team", TeamModeRouter);
+app.use("/auth", AuthRouter);
+
+// Apply the authenticate middleware to all routes except /auth
+router.use((req, res, next) => {
+  if (req.path.startsWith("/auth")) {
+    return next();
+  }
+  authenticate(req, res, next);
+});
 
 router.post("/create_stream", createStream);
 router.post("/invite_to_stage", inviteToStage);
