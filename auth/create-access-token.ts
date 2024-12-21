@@ -21,7 +21,7 @@ export const issueToken = async (req: any, res: any) => {
 
 /*util functions */
 
-const generateToken = (appId: string): string => {
+export const generateToken = (appId: string): string => {
   try {
     if (!SECRET_KEY) {
       return "";

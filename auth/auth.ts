@@ -1,5 +1,6 @@
 import { NextFunction } from "express";
 import { config } from "dotenv";
+import { generateToken } from "./create-access-token.js";
 config();
 const validTokens = process.env.VALID_TOKENS?.split(",") || [];
 
@@ -9,7 +10,14 @@ export const authenticate = (req: any, res: any, next: NextFunction) => {
     : req.headers["sdk-token"];
 
   if (!token) {
-    return res.status(401).send({ message: "No token provided" });
+    const appId = req.body?.appId || genRandomId();
+    const newGenId = generateToken(appId);
+    return res
+      .status(401)
+      .send({
+        newToken: newGenId,
+        message: "Request for Authorization from Admin",
+      });
   }
 
   if (!validTokens.includes(token)) {
@@ -17,4 +25,8 @@ export const authenticate = (req: any, res: any, next: NextFunction) => {
   }
 
   next();
+};
+
+const genRandomId = () => {
+  return Math.random().toString(36).substring(7);
 };

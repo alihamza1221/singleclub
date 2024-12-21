@@ -27,6 +27,7 @@ import { getSingleLiveStream } from "../data_apis/get_single_live_stream.js";
 import { getAudioLiveStream } from "../data_apis/get_audio_live_stream.js";
 import { getMultiLiveStream } from "../data_apis/get_multi_live_stream.js";
 import { getPkRoom } from "../data_apis/get_pk_room.js";
+import { getSDKModules } from "../data_apis/get-sdk-modules.js";
 config();
 
 const app = express();
@@ -55,6 +56,7 @@ router.get("/sdk/get_single_live_stream", getSingleLiveStream);
 router.get("/sdk/get_audio_live_stream", getAudioLiveStream);
 router.get("/sdk/get_multi_live_stream", getMultiLiveStream);
 router.get("/sdk/get_pk_room", getPkRoom);
+router.get("/sdk", getSDKModules);
 
 router.post("/create_stream", createStream);
 router.post("/invite_to_stage", inviteToStage);
